@@ -8,44 +8,90 @@ on:
 jobs:
   backup:
     runs-on: ubuntu-latest
+    env:
+      MONGODB_URI: mongodb://172.18.0.2:27017/todos
+      BACKUP_RETENTION_DAYS: 7
+      BACKUP_PREFIX: mongodb-backup
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v2
 
-      - name: Create SSH key
+      - name: Set up SSH
         env:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
         run: |
           mkdir -p ~/.ssh
           echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
           ssh-keyscan -H 44.203.38.191 >> ~/.ssh/known_hosts
+          echo "StrictHostKeyChecking=no" >> ~/.ssh/config
 
-      - name: Set correct permissions
+      - name: Create remote directories
         run: |
-          chmod +x $GITHUB_WORKSPACE/scripts/backup.sh
-          chmod +x $GITHUB_WORKSPACE/scripts/restore.sh
+          ssh -i ~/.ssh/id_rsa ubuntu@44.203.38.191 '
+            mkdir -p /opt/mongodb-backup
+            touch /opt/mongodb-backup/.env
+          '
 
-      - name: Copy scripts to control node
-        working-directory: ${{ github.workspace }}
+      - name: Copy environment file
         run: |
+          echo "MONGODB_URI=${{ env.MONGODB_URI }}" > .env.tmp
+          echo "AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }}" >> .env.tmp
+          echo "AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }}" >> .env.tmp
+          echo "AWS_DEFAULT_REGION=${{ secrets.AWS_DEFAULT_REGION }}" >> .env.tmp
+          echo "S3_BUCKET_NAME=${{ secrets.S3_BUCKET_NAME }}" >> .env.tmp
+          echo "BACKUP_RETENTION_DAYS=${{ env.BACKUP_RETENTION_DAYS }}" >> .env.tmp
+          echo "BACKUP_PREFIX=${{ env.BACKUP_PREFIX }}" >> .env.tmp
+          scp -i ~/.ssh/id_rsa .env.tmp ubuntu@44.203.38.191:/opt/mongodb-backup/.env
+          rm .env.tmp
+
+      - name: Copy scripts and set permissions
+        run: |
+          chmod +x scripts/backup.sh scripts/restore.sh
           scp -i ~/.ssh/id_rsa scripts/backup.sh scripts/restore.sh ubuntu@44.203.38.191:/opt/mongodb-backup/
+          ssh -i ~/.ssh/id_rsa ubuntu@44.203.38.191 'chmod +x /opt/mongodb-backup/*.sh'
 
-      - name: Run backup on control node
-        env:
-          MONGODB_URI: mongodb://172.18.0.2:27017/todos
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION }}
-          S3_BUCKET_NAME: ${{ secrets.S3_BUCKET_NAME }}
+      - name: Install dependencies on control node
         run: |
-          ssh -i ~/.ssh/id_rsa ubuntu@44.203.38.191 'cd /opt/mongodb-backup && \
-          export MONGODB_URI="${{ env.MONGODB_URI }}" && \
-          export AWS_ACCESS_KEY_ID="${{ secrets.AWS_ACCESS_KEY_ID }}" && \
-          export AWS_SECRET_ACCESS_KEY="${{ secrets.AWS_SECRET_ACCESS_KEY }}" && \
-          export AWS_DEFAULT_REGION="${{ secrets.AWS_DEFAULT_REGION }}" && \
-          export S3_BUCKET_NAME="${{ secrets.S3_BUCKET_NAME }}" && \
-          export BACKUP_RETENTION_DAYS=7 && \
-          export BACKUP_PREFIX=mongodb-backup && \
-          ./backup.sh'
+          ssh -i ~/.ssh/id_rsa ubuntu@44.203.38.191 '
+            # Install MongoDB tools if not present
+            if ! command -v mongodump &> /dev/null; then
+              wget -qO - https://www.mongodb.org/static/pgp/server-6.0.asc | sudo apt-key add -
+              echo "deb [ arch=amd64,arm64 ] https://repo.mongodb.org/apt/ubuntu focal/mongodb-org/6.0 multiverse" | sudo tee /etc/apt/sources.list.d/mongodb-org-6.0.list
+              sudo apt-get update
+              sudo apt-get install -y mongodb-database-tools mongodb-mongosh
+            fi
+
+            # Install AWS CLI if not present
+            if ! command -v aws &> /dev/null; then
+              curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+              unzip -o awscliv2.zip
+              sudo ./aws/install
+              rm -rf aws awscliv2.zip
+            fi
+
+            # Install jq if not present
+            if ! command -v jq &> /dev/null; then
+              sudo apt-get install -y jq
+            fi
+          '
+
+      - name: Configure AWS on control node
+        run: |
+          ssh -i ~/.ssh/id_rsa ubuntu@44.203.38.191 '
+            mkdir -p ~/.aws
+            cat > ~/.aws/credentials << EOL
+            [default]
+            aws_access_key_id = ${{ secrets.AWS_ACCESS_KEY_ID }}
+            aws_secret_access_key = ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+            region = ${{ secrets.AWS_DEFAULT_REGION }}
+            EOL
+          '
+
+      - name: Run backup
+        run: |
+          ssh -i ~/.ssh/id_rsa ubuntu@44.203.38.191 '
+            cd /opt/mongodb-backup && ./backup.sh
+          '
