@@ -12,6 +12,7 @@ jobs:
       MONGODB_URI: mongodb://multi-container-service-mongodb-1:27017/todos
       BACKUP_RETENTION_DAYS: 7
       BACKUP_PREFIX: mongodb-backup
+      CONTAINER_NAME: mongodb-backup-${{ github.run_id }}
 
     steps:
       - name: Checkout code
@@ -55,29 +56,26 @@ jobs:
 
       - name: Create Docker container for backup
         run: |
-          ssh -i ~/.ssh/id_rsa ubuntu@44.203.38.191 '
+          ssh -i ~/.ssh/id_rsa ubuntu@44.203.38.191 "
             # Clean up any existing containers
-            docker rm -f mongodb-backup-* 2>/dev/null || true
-
-            # Generate unique container name with timestamp
-            CONTAINER_NAME="mongodb-backup-$(date +%s)"
+            docker ps -a | grep 'mongodb-backup-' | awk '{print \$1}' | xargs -r docker rm -f
 
             # Pull MongoDB tools image
             docker pull mongodb/mongodb-community-server:6.0-ubuntu2204
 
             # Create backup container with root user
             docker create \
-              --name "$CONTAINER_NAME" \
+              --name ${{ env.CONTAINER_NAME }} \
               --network multi-container-service_app-network \
               -v /opt/mongodb-backup:/backup \
               --user root \
               mongodb/mongodb-community-server:6.0-ubuntu2204
 
             # Start the container
-            docker start "$CONTAINER_NAME"
+            docker start ${{ env.CONTAINER_NAME }}
 
             # Install AWS CLI and jq in the container
-            docker exec "$CONTAINER_NAME" bash -c "
+            docker exec ${{ env.CONTAINER_NAME }} bash -c '
               mkdir -p /var/lib/apt/lists/partial && \
               apt-get clean && \
               apt-get update && \
@@ -86,37 +84,31 @@ jobs:
               unzip awscliv2.zip && \
               ./aws/install && \
               rm -rf aws awscliv2.zip
-            "
-
-            # Save container name for next steps
-            echo "$CONTAINER_NAME" > /opt/mongodb-backup/container_name
-          '
+            '
+          "
 
       - name: Configure AWS in container
         run: |
-          ssh -i ~/.ssh/id_rsa ubuntu@44.203.38.191 '
-            CONTAINER_NAME=$(cat /opt/mongodb-backup/container_name)
-            docker exec "$CONTAINER_NAME" mkdir -p /root/.aws
-            docker exec "$CONTAINER_NAME" bash -c "cat > /root/.aws/credentials << EOL
+          ssh -i ~/.ssh/id_rsa ubuntu@44.203.38.191 "
+            docker exec ${{ env.CONTAINER_NAME }} mkdir -p /root/.aws
+            docker exec ${{ env.CONTAINER_NAME }} bash -c 'cat > /root/.aws/credentials << EOL
             [default]
             aws_access_key_id = ${{ secrets.AWS_ACCESS_KEY_ID }}
             aws_secret_access_key = ${{ secrets.AWS_SECRET_ACCESS_KEY }}
             region = ${{ secrets.AWS_DEFAULT_REGION }}
-            EOL"
-          '
+            EOL'
+          "
 
       - name: Run backup in container
         run: |
-          ssh -i ~/.ssh/id_rsa ubuntu@44.203.38.191 '
-            CONTAINER_NAME=$(cat /opt/mongodb-backup/container_name)
-            docker exec -w /backup "$CONTAINER_NAME" bash -c "
+          ssh -i ~/.ssh/id_rsa ubuntu@44.203.38.191 "
+            docker exec -w /backup ${{ env.CONTAINER_NAME }} bash -c '
               source .env && \
               echo \"Testing MongoDB connection...\" && \
               mongosh --eval \"db.runCommand({ping:1})\" \"$MONGODB_URI\" && \
               echo \"MongoDB connection successful\" && \
               ./backup.sh
-            "
-            docker stop "$CONTAINER_NAME"
-            docker rm "$CONTAINER_NAME"
-            rm /opt/mongodb-backup/container_name
-          '
+            '
+            docker stop ${{ env.CONTAINER_NAME }}
+            docker rm ${{ env.CONTAINER_NAME }}
+          "
