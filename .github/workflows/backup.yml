@@ -56,22 +56,28 @@ jobs:
       - name: Create Docker container for backup
         run: |
           ssh -i ~/.ssh/id_rsa ubuntu@44.203.38.191 '
+            # Clean up any existing containers
+            docker rm -f mongodb-backup-* 2>/dev/null || true
+
+            # Generate unique container name with timestamp
+            CONTAINER_NAME="mongodb-backup-$(date +%s)"
+
             # Pull MongoDB tools image
             docker pull mongodb/mongodb-community-server:6.0-ubuntu2204
 
             # Create backup container with root user
             docker create \
-              --name mongodb-backup \
+              --name "$CONTAINER_NAME" \
               --network multi-container-service_app-network \
               -v /opt/mongodb-backup:/backup \
               --user root \
               mongodb/mongodb-community-server:6.0-ubuntu2204
 
             # Start the container
-            docker start mongodb-backup
+            docker start "$CONTAINER_NAME"
 
             # Install AWS CLI and jq in the container
-            docker exec mongodb-backup bash -c "
+            docker exec "$CONTAINER_NAME" bash -c "
               mkdir -p /var/lib/apt/lists/partial && \
               apt-get clean && \
               apt-get update && \
@@ -81,13 +87,17 @@ jobs:
               ./aws/install && \
               rm -rf aws awscliv2.zip
             "
+
+            # Save container name for next steps
+            echo "$CONTAINER_NAME" > /opt/mongodb-backup/container_name
           '
 
       - name: Configure AWS in container
         run: |
           ssh -i ~/.ssh/id_rsa ubuntu@44.203.38.191 '
-            docker exec mongodb-backup mkdir -p /root/.aws
-            docker exec mongodb-backup bash -c "cat > /root/.aws/credentials << EOL
+            CONTAINER_NAME=$(cat /opt/mongodb-backup/container_name)
+            docker exec "$CONTAINER_NAME" mkdir -p /root/.aws
+            docker exec "$CONTAINER_NAME" bash -c "cat > /root/.aws/credentials << EOL
             [default]
             aws_access_key_id = ${{ secrets.AWS_ACCESS_KEY_ID }}
             aws_secret_access_key = ${{ secrets.AWS_SECRET_ACCESS_KEY }}
@@ -98,13 +108,15 @@ jobs:
       - name: Run backup in container
         run: |
           ssh -i ~/.ssh/id_rsa ubuntu@44.203.38.191 '
-            docker exec -w /backup mongodb-backup bash -c "
+            CONTAINER_NAME=$(cat /opt/mongodb-backup/container_name)
+            docker exec -w /backup "$CONTAINER_NAME" bash -c "
               source .env && \
               echo \"Testing MongoDB connection...\" && \
               mongosh --eval \"db.runCommand({ping:1})\" \"$MONGODB_URI\" && \
               echo \"MongoDB connection successful\" && \
               ./backup.sh
             "
-            docker stop mongodb-backup
-            docker rm mongodb-backup
+            docker stop "$CONTAINER_NAME"
+            docker rm "$CONTAINER_NAME"
+            rm /opt/mongodb-backup/container_name
           '
