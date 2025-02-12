@@ -424,3 +424,13 @@ node_modules/
 # OS files
 .DS_Store
 Thumbs.db
+
+# AWS credentials
+.aws/
+
+# Logs
+*.log
+
+# System files
+.DS_Store
+Thumbs.db

@@ -4,9 +4,7 @@
 set -e
 
 # Load environment variables
-if [ -f .env ]; then
-    source .env
-fi
+source .env
 
 # Check required environment variables
 if [ -z "$MONGODB_URI" ] || [ -z "$S3_BUCKET_NAME" ] || [ -z "$BACKUP_PREFIX" ]; then
@@ -21,7 +19,7 @@ BACKUP_RETENTION_DAYS=${BACKUP_RETENTION_DAYS:-7}
 # Create timestamp for backup file
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 BACKUP_NAME="${BACKUP_PREFIX}_${TIMESTAMP}.gz"
-BACKUP_PATH="/backup/${BACKUP_NAME}"
+BACKUP_PATH="/opt/mongodb-backup/${BACKUP_NAME}"
 
 echo "Starting MongoDB backup at $(date)"
 echo "Backup file: ${BACKUP_NAME}"
