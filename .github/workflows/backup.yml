@@ -24,7 +24,9 @@ jobs:
 
       - name: Copy scripts to control node
         run: |
-          scp -i ~/.ssh/id_rsa scripts/backup.sh scripts/restore.sh ubuntu@44.203.38.191:/opt/mongodb-backup/
+          pwd
+          ls -la
+          scp -i ~/.ssh/id_rsa ./scripts/backup.sh ./scripts/restore.sh ubuntu@44.203.38.191:/opt/mongodb-backup/
 
       - name: Run backup on control node
         env:
