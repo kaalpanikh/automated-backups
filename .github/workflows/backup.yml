@@ -9,7 +9,7 @@ jobs:
   backup:
     runs-on: ubuntu-latest
     env:
-      MONGODB_URI: mongodb://172.18.0.2:27017/todos
+      MONGODB_URI: mongodb://mongodb:27017/todos
       BACKUP_RETENTION_DAYS: 7
       BACKUP_PREFIX: mongodb-backup
 
@@ -53,45 +53,47 @@ jobs:
           scp -i ~/.ssh/id_rsa scripts/backup.sh scripts/restore.sh ubuntu@44.203.38.191:/opt/mongodb-backup/
           ssh -i ~/.ssh/id_rsa ubuntu@44.203.38.191 'chmod +x /opt/mongodb-backup/*.sh'
 
-      - name: Install dependencies on control node
+      - name: Create Docker container for backup
         run: |
           ssh -i ~/.ssh/id_rsa ubuntu@44.203.38.191 '
-            # Install MongoDB tools if not present
-            if ! command -v mongodump &> /dev/null; then
-              wget -qO - https://www.mongodb.org/static/pgp/server-6.0.asc | sudo apt-key add -
-              echo "deb [ arch=amd64,arm64 ] https://repo.mongodb.org/apt/ubuntu focal/mongodb-org/6.0 multiverse" | sudo tee /etc/apt/sources.list.d/mongodb-org-6.0.list
-              sudo apt-get update
-              sudo apt-get install -y mongodb-database-tools mongodb-mongosh
-            fi
+            # Pull MongoDB tools image
+            docker pull mongodb/mongodb-community-server:6.0-ubuntu2204
 
-            # Install AWS CLI if not present
-            if ! command -v aws &> /dev/null; then
-              curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
-              unzip -o awscliv2.zip
-              sudo ./aws/install
-              rm -rf aws awscliv2.zip
-            fi
+            # Create backup container
+            docker create \
+              --name mongodb-backup \
+              --network multi-container-service_app-network \
+              -v /opt/mongodb-backup:/backup \
+              mongodb/mongodb-community-server:6.0-ubuntu2204
 
-            # Install jq if not present
-            if ! command -v jq &> /dev/null; then
-              sudo apt-get install -y jq
-            fi
+            # Start the container
+            docker start mongodb-backup
+
+            # Install AWS CLI and jq in the container
+            docker exec mongodb-backup apt-get update
+            docker exec mongodb-backup apt-get install -y curl unzip jq
+            docker exec mongodb-backup curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+            docker exec mongodb-backup unzip awscliv2.zip
+            docker exec mongodb-backup ./aws/install
+            docker exec mongodb-backup rm -rf aws awscliv2.zip
           '
 
-      - name: Configure AWS on control node
+      - name: Configure AWS in container
         run: |
           ssh -i ~/.ssh/id_rsa ubuntu@44.203.38.191 '
-            mkdir -p ~/.aws
-            cat > ~/.aws/credentials << EOL
+            docker exec mongodb-backup mkdir -p /root/.aws
+            docker exec mongodb-backup bash -c "cat > /root/.aws/credentials << EOL
             [default]
             aws_access_key_id = ${{ secrets.AWS_ACCESS_KEY_ID }}
             aws_secret_access_key = ${{ secrets.AWS_SECRET_ACCESS_KEY }}
             region = ${{ secrets.AWS_DEFAULT_REGION }}
-            EOL
+            EOL"
           '
 
-      - name: Run backup
+      - name: Run backup in container
         run: |
           ssh -i ~/.ssh/id_rsa ubuntu@44.203.38.191 '
-            cd /opt/mongodb-backup && ./backup.sh
+            docker exec -w /backup mongodb-backup ./backup.sh
+            docker stop mongodb-backup
+            docker rm mongodb-backup
           '
