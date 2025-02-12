@@ -9,7 +9,7 @@ jobs:
   backup:
     runs-on: ubuntu-latest
     env:
-      MONGODB_URI: mongodb://mongodb:27017/todos
+      MONGODB_URI: mongodb://multi-container-service-mongodb-1:27017/todos
       BACKUP_RETENTION_DAYS: 7
       BACKUP_PREFIX: mongodb-backup
 
@@ -70,12 +70,14 @@ jobs:
             docker start mongodb-backup
 
             # Install AWS CLI and jq in the container
-            docker exec mongodb-backup apt-get update
-            docker exec mongodb-backup apt-get install -y curl unzip jq
-            docker exec mongodb-backup curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
-            docker exec mongodb-backup unzip awscliv2.zip
-            docker exec mongodb-backup ./aws/install
-            docker exec mongodb-backup rm -rf aws awscliv2.zip
+            docker exec mongodb-backup bash -c "
+              apt-get update && \
+              apt-get install -y curl unzip jq && \
+              curl \"https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip\" -o \"awscliv2.zip\" && \
+              unzip awscliv2.zip && \
+              ./aws/install && \
+              rm -rf aws awscliv2.zip
+            "
           '
 
       - name: Configure AWS in container
@@ -93,7 +95,13 @@ jobs:
       - name: Run backup in container
         run: |
           ssh -i ~/.ssh/id_rsa ubuntu@44.203.38.191 '
-            docker exec -w /backup mongodb-backup ./backup.sh
+            docker exec -w /backup mongodb-backup bash -c "
+              source .env && \
+              echo \"Testing MongoDB connection...\" && \
+              mongosh --eval \"db.runCommand({ping:1})\" \"$MONGODB_URI\" && \
+              echo \"MongoDB connection successful\" && \
+              ./backup.sh
+            "
             docker stop mongodb-backup
             docker rm mongodb-backup
           '
