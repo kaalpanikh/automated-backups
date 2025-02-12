@@ -22,11 +22,15 @@ jobs:
           chmod 600 ~/.ssh/id_rsa
           ssh-keyscan -H 44.203.38.191 >> ~/.ssh/known_hosts
 
-      - name: Copy scripts to control node
+      - name: Set correct permissions
         run: |
-          pwd
-          ls -la
-          scp -i ~/.ssh/id_rsa ./scripts/backup.sh ./scripts/restore.sh ubuntu@44.203.38.191:/opt/mongodb-backup/
+          chmod +x $GITHUB_WORKSPACE/scripts/backup.sh
+          chmod +x $GITHUB_WORKSPACE/scripts/restore.sh
+
+      - name: Copy scripts to control node
+        working-directory: ${{ github.workspace }}
+        run: |
+          scp -i ~/.ssh/id_rsa scripts/backup.sh scripts/restore.sh ubuntu@44.203.38.191:/opt/mongodb-backup/
 
       - name: Run backup on control node
         env:

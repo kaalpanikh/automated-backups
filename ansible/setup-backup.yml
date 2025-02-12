@@ -1,0 +1,63 @@
+---
+- name: Setup MongoDB Backup System
+  hosts: control
+  become: yes
+  tasks:
+    - name: Install required packages
+      apt:
+        name:
+          - mongodb-database-tools
+          - awscli
+          - jq
+        state: present
+        update_cache: yes
+
+    - name: Create backup directory
+      file:
+        path: /opt/mongodb-backup
+        state: directory
+        mode: '0755'
+
+    - name: Copy backup scripts
+      copy:
+        src: "{{ item.src }}"
+        dest: "{{ item.dest }}"
+        mode: '0755'
+      with_items:
+        - { src: '../scripts/backup.sh', dest: '/opt/mongodb-backup/backup.sh' }
+        - { src: '../scripts/restore.sh', dest: '/opt/mongodb-backup/restore.sh' }
+
+    - name: Copy environment file
+      copy:
+        src: ../.env
+        dest: /opt/mongodb-backup/.env
+        mode: '0600'
+
+    - name: Setup cron job for backup
+      cron:
+        name: "MongoDB Backup"
+        job: "cd /opt/mongodb-backup && ./backup.sh >> /var/log/mongodb-backup.log 2>&1"
+        hour: "*/12"
+        minute: "0"
+        state: present
+
+    - name: Create log file
+      file:
+        path: /var/log/mongodb-backup.log
+        state: touch
+        mode: '0644'
+
+    - name: Setup log rotation
+      copy:
+        content: |
+          /var/log/mongodb-backup.log {
+            daily
+            rotate 7
+            compress
+            delaycompress
+            missingok
+            notifempty
+            create 644 root root
+          }
+        dest: /etc/logrotate.d/mongodb-backup
+        mode: '0644'

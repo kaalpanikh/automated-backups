@@ -398,3 +398,29 @@ FodyWeavers.xsd
 
 # JetBrains Rider
 *.sln.iml
+
+# Environment variables
+.env
+
+# Node modules
+node_modules/
+
+# Temporary files
+/tmp
+*.tmp
+*.temp
+
+# Backup files
+*.gz
+*.dump
+*.archive
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
